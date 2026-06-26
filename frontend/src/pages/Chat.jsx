@@ -3,6 +3,7 @@ import { useChat } from '../context/ChatContext';
 import { useAuth } from '../context/AuthContext';
 import Sidebar from '../components/Sidebar';
 import Markdown from '../components/Markdown';
+import { BackendErrorDashboard } from '../components/ThreeDEffects';
 import { 
   FiSend, FiPaperclip, FiMic, FiMicOff, 
   FiVolume2, FiVolumeX, FiCornerDownLeft, FiRefreshCw,
@@ -36,6 +37,7 @@ const Chat = () => {
   
   // Likes/Dislikes local map for UX interaction
   const [reactions, setReactions] = useState({});
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -213,8 +215,8 @@ const Chat = () => {
             </div>
           </div>
 
-          {activeChat && (
-            <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3">
+            {activeChat ? (
               <button 
                 onClick={() => toggleFavoriteConversation(activeChat.id, !activeChat.is_favorite)}
                 className="text-xs font-semibold px-3 py-1 rounded-md border border-slate-700/50 bg-slate-900/40 hover:bg-slate-800 hover:text-white flex items-center space-x-1"
@@ -222,8 +224,15 @@ const Chat = () => {
                 <span className={activeChat.is_favorite ? 'text-yellow-400' : 'text-slate-400'}>★</span>
                 <span>{activeChat.is_favorite ? 'Favorited' : 'Favorite'}</span>
               </button>
-            </div>
-          )}
+            ) : (
+              <button 
+                onClick={() => setShowDiagnostics(true)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-md border border-slate-700/50 bg-slate-900/40 hover:bg-slate-800 text-slate-400 hover:text-white flex items-center space-x-1"
+              >
+                <span>⚙ Diagnostics</span>
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Messages Pane */}
@@ -268,6 +277,7 @@ const Chat = () => {
               {messages.map((msg) => {
                 const isUser = msg.sender === 'user';
                 const hasReacted = reactions[msg.id];
+                const isSystemError = !isUser && (msg.content.includes('System Error') || msg.content.includes('service is currently unavailable') || msg.content.includes('offline') || msg.content.includes('API key appears to be a Google Cloud Vertex AI key'));
                 
                 return (
                   <div 
@@ -297,10 +307,28 @@ const Chat = () => {
                           ? 'bg-blue-600/10 border-blue-500/20 text-slate-100 max-w-[85%]' 
                           : 'bg-slate-900/60 border-white/5 text-slate-200 max-w-[85%]'
                       }`}>
-                        <Markdown content={msg.content} />
+                        {isSystemError ? (
+                          <div className="space-y-4">
+                            <Markdown content={msg.content} />
+                            <div className="p-4 bg-red-950/20 border border-red-500/30 rounded-xl space-y-2">
+                              <span className="text-xs text-red-400 font-bold block">⚙ Diagnostics Panel Available</span>
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                Pavan-GPT has caught a backend communication disruption. Open the interactive troubleshooting panel to configure your server.
+                              </p>
+                              <button 
+                                onClick={() => setShowDiagnostics(true)}
+                                className="w-full py-2 bg-red-650 hover:bg-red-600 text-white rounded-lg font-bold text-xs shadow transition-colors border-0 cursor-pointer"
+                              >
+                                Launch diagnostics & Admin settings
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <Markdown content={msg.content} />
+                        )}
                         
                         {/* Audio and Feedback Buttons for AI */}
-                        {!isUser && (
+                        {!isUser && !isSystemError && (
                           <div className="flex items-center space-x-3.5 mt-3 pt-2.5 border-t border-white/5 text-slate-500 text-[11px]">
                             {/* Speech Synthesis */}
                             <button
@@ -465,6 +493,12 @@ const Chat = () => {
           </div>
         </div>
       </div>
+      
+      {/* Diagnostics Console Dashboard Modal */}
+      <BackendErrorDashboard 
+        isOpen={showDiagnostics}
+        onClose={() => setShowDiagnostics(false)}
+      />
     </div>
   );
 };

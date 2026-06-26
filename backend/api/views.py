@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth.models import User
+from django.conf import settings
 import os
 
 from .models import UserProfile, Settings, Conversation, Message, UploadedDocument, Favorite
@@ -314,4 +315,147 @@ class LogoutView(APIView):
             return Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"message": "Successfully logged out (session cleared)."}, status=status.HTTP_200_OK)
+
+
+# System Diagnostics & Admin Settings View
+class DiagnosticsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        # Return currently configured environment settings (obfuscated key)
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        use_mock_fallback = os.getenv("USE_MOCK_FALLBACK", "False") == "True"
+
+        # Obfuscate key
+        obfuscated_key = ""
+        key_type = "None"
+        if api_key:
+            if api_key.startswith("AQ.") or api_key.startswith("AIzaSy"):
+                key_type = "Standard Gemini API Key (AI Studio)"
+            else:
+                key_type = "Custom / Other"
+            
+            if len(api_key) > 8:
+                obfuscated_key = api_key[:6] + "..." + api_key[-4:]
+            else:
+                obfuscated_key = "..."
+
+        # Check if there is any superuser
+        superuser_exists = User.objects.filter(is_superuser=True).exists()
+
+        return Response({
+            "backend_online": True,
+            "gemini_api_key_configured": bool(api_key),
+            "gemini_api_key_obfuscated": obfuscated_key,
+            "gemini_api_key_type": key_type,
+            "gemini_model": model_name,
+            "use_mock_fallback": use_mock_fallback,
+            "superuser_exists": superuser_exists,
+            "debug_mode": settings.DEBUG if hasattr(settings, 'DEBUG') else True
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        action = request.data.get("action")
+        if not action:
+            return Response({"error": "action parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Test key validity
+        if action == "test_key":
+            api_key = request.data.get("gemini_api_key")
+            model_name = request.data.get("gemini_model", "gemini-1.5-flash")
+            if not api_key:
+                return Response({"error": "gemini_api_key is required to test."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                result = GeminiService.test_api_key_connectivity(api_key, model_name)
+                return Response(result, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"success": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Update config files (.env)
+        elif action == "update_config":
+            # Direct edit allowed only in development
+            from django.conf import settings as django_settings
+            if not getattr(django_settings, 'DEBUG', True):
+                return Response({"error": "Config updates are disabled in production settings."}, status=status.HTTP_403_FORBIDDEN)
+
+            api_key = request.data.get("gemini_api_key")
+            model_name = request.data.get("gemini_model")
+            use_mock_fallback = request.data.get("use_mock_fallback")
+
+            try:
+                # Find and edit backend/.env file
+                backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                env_path = os.path.join(backend_dir, ".env")
+                if not os.path.exists(env_path):
+                    # Fallback to current working directory
+                    env_path = ".env"
+                
+                # If .env does not exist, create a clean one
+                if not os.path.exists(env_path):
+                    with open(env_path, "w", encoding="utf-8") as f:
+                        f.write("# Pavan-GPT Configuration\n")
+
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+
+                updates = {}
+                if api_key is not None:
+                    updates["GEMINI_API_KEY"] = api_key
+                if model_name is not None:
+                    updates["GEMINI_MODEL"] = model_name
+                if use_mock_fallback is not None:
+                    updates["USE_MOCK_FALLBACK"] = "True" if use_mock_fallback else "False"
+
+                new_lines = []
+                written_keys = set()
+
+                for line in lines:
+                    stripped = line.strip()
+                    if "=" in stripped and not stripped.startswith("#"):
+                        key = stripped.split("=")[0].strip()
+                        if key in updates:
+                            new_lines.append(f"{key}={updates[key]}\n")
+                            written_keys.add(key)
+                            # Update OS environment
+                            os.environ[key] = str(updates[key])
+                            continue
+                    new_lines.append(line)
+
+                # Add any missing keys
+                for key, val in updates.items():
+                    if key not in written_keys:
+                        new_lines.append(f"{key}={val}\n")
+                        os.environ[key] = str(val)
+
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+
+                return Response({
+                    "success": True, 
+                    "message": "Configuration updated successfully and environment reloaded!"
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 3. Development helper to clear DB
+        elif action == "clear_database":
+            # Clear database only allowed in debug mode
+            from django.conf import settings as django_settings
+            if not getattr(django_settings, 'DEBUG', True):
+                return Response({"error": "Database clearing is disabled in production settings."}, status=status.HTTP_403_FORBIDDEN)
+            
+            try:
+                # Clear all user conversation logs to reset dev
+                Message.objects.all().delete()
+                Conversation.objects.all().delete()
+                UploadedDocument.objects.all().delete()
+                return Response({
+                    "success": True, 
+                    "message": "Development database cleared successfully! All chats and uploaded documents have been reset."
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"error": f"Unknown action: {action}"}, status=status.HTTP_400_BAD_REQUEST)
 

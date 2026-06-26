@@ -76,3 +76,16 @@ class ConversationTests(APITestCase):
         conversation = Conversation.objects.first()
         self.assertEqual(conversation.title, "Exploring Machine Learning")
         self.assertEqual(conversation.user, self.user)
+
+
+class SystemDiagnosticsTests(APITestCase):
+    def test_diagnostics_retrieval(self):
+        """
+        Retrieving system diagnostics settings should return server config parameters without authentication.
+        """
+        url = reverse('diagnostics')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('backend_online', response.data)
+        self.assertIn('gemini_api_key_configured', response.data)
+        self.assertIn('use_mock_fallback', response.data)

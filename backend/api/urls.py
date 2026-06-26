@@ -2,7 +2,8 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     RegisterView, LogoutView, UserProfileView, ConversationViewSet, 
-    MessageListView, ChatAPIView, DocumentUploadView, BonusToolsView
+    MessageListView, ChatAPIView, DocumentUploadView, BonusToolsView,
+    DiagnosticsView
 )
 
 urlpatterns = [
@@ -30,4 +31,7 @@ urlpatterns = [
     path('chat/', ChatAPIView.as_view(), name='chat'),
     path('documents/upload/', DocumentUploadView.as_view(), name='document_upload'),
     path('bonus/', BonusToolsView.as_view(), name='bonus_tools'),
+    
+    # System Diagnostics
+    path('diagnostics/', DiagnosticsView.as_view(), name='diagnostics'),
 ]

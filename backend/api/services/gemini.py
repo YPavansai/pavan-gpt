@@ -5,7 +5,44 @@ from google.generativeai.types import GenerationConfig
 class GeminiService:
     @staticmethod
     def get_model_name():
-        return os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+    @classmethod
+    def should_fallback_to_mock(cls):
+        # If USE_MOCK_FALLBACK is explicitly True, always fallback
+        if os.getenv("USE_MOCK_FALLBACK") == "True":
+            return True
+        # If API key is missing, pre-emptively fallback
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return True
+        return False
+
+    @classmethod
+    def test_api_key_connectivity(cls, api_key, model_name):
+        """
+        Tests if a given API key and model name are valid by sending a tiny prompt.
+        """
+        if not api_key:
+            raise ValueError("API Key is required for testing.")
+            
+        try:
+            # Temporary configure
+            import google.generativeai as genai
+            from google.generativeai.types import GenerationConfig
+            genai.configure(api_key=api_key)
+            test_model = genai.GenerativeModel(model_name)
+            # Use max_output_tokens=2 to make it fast and cheap
+            response = test_model.generate_content("ping", generation_config=GenerationConfig(max_output_tokens=2))
+            return {
+                "success": True,
+                "message": "API key validated successfully!"
+            }
+        except Exception as e:
+            error_msg = str(e)
+            if "not found" in error_msg.lower() or "api version" in error_msg.lower():
+                error_msg += " -- Troubleshooting Tip: The selected model may not be supported by your API key or is deprecated. Try selecting 'gemini-2.5-flash' or another available model in the settings."
+            raise Exception(error_msg)
 
     @classmethod
     def get_client(cls):
@@ -20,6 +57,11 @@ class GeminiService:
         """
         Sends messages to Gemini with full history context.
         """
+        latest_prompt = messages_list[-1]['content'] if messages_list else ""
+        if cls.should_fallback_to_mock():
+            print("Using Mock Fallback Mode (pre-emptive)")
+            return cls.generate_mock_chat_response(latest_prompt, document_context)
+
         try:
             model = cls.get_client()
             gemini_history = []
@@ -31,7 +73,6 @@ class GeminiService:
                 })
 
             chat = model.start_chat(history=gemini_history)
-            latest_prompt = messages_list[-1]['content']
             
             full_prompt = ""
             if document_context:
@@ -49,8 +90,15 @@ class GeminiService:
             response = chat.send_message(full_prompt, generation_config=config)
             return response.text
         except Exception as e:
-            print(f"Gemini API failure: {e}. Generating clean mock response...")
-            return cls.generate_mock_chat_response(messages_list[-1]['content'], document_context)
+            print(f"Gemini API failure: {e}.")
+            if os.getenv("USE_MOCK_FALLBACK") == "True":
+                print("Using Mock Fallback Mode (on failure)")
+                return cls.generate_mock_chat_response(latest_prompt, document_context)
+            
+            error_msg = str(e)
+            if "not found" in error_msg.lower() or "api version" in error_msg.lower():
+                error_msg += " -- Troubleshooting Tip: The selected model may not be supported by your API key or is deprecated. Try selecting 'gemini-2.5-flash' or another available model in the settings."
+            raise Exception(error_msg)
 
     @classmethod
     def generate_summary(cls, text_content):
@@ -61,6 +109,8 @@ class GeminiService:
             return "No content to summarize."
         
         try:
+            if cls.should_fallback_to_mock():
+                raise Exception("Mock mode active - fallback summary")
             model = cls.get_client()
             prompt = (
                 "Please analyze the following text and provide a concise, professional summary "
@@ -99,6 +149,10 @@ class GeminiService:
 
         system_instruction = prompts.get(tool_type, "You are a helpful AI assistant.")
         
+        if cls.should_fallback_to_mock():
+            print(f"Using Mock Fallback Mode for {tool_type} (pre-emptive)")
+            return cls.generate_mock_bonus_response(tool_type, user_input, resume_text)
+
         try:
             model = cls.get_client()
             prompt = ""
@@ -112,51 +166,124 @@ class GeminiService:
             )
             return response.text
         except Exception as e:
-            print(f"Bonus tool {tool_type} failed: {e}. Running local mock fallback...")
-            return cls.generate_mock_bonus_response(tool_type, user_input, resume_text)
+            print(f"Bonus tool {tool_type} failed: {e}.")
+            if os.getenv("USE_MOCK_FALLBACK") == "True":
+                print(f"Using Mock Fallback Mode for {tool_type} (on failure)")
+                return cls.generate_mock_bonus_response(tool_type, user_input, resume_text)
+                
+            error_msg = str(e)
+            if "not found" in error_msg.lower() or "api version" in error_msg.lower():
+                error_msg += " -- Troubleshooting Tip: The selected model may not be supported by your API key or is deprecated. Try selecting 'gemini-2.5-flash' or another available model in the settings."
+            raise Exception(error_msg)
 
     # --- LOCAL SIMULATION RESPONDERS ---
     
     @classmethod
     def generate_mock_chat_response(cls, query, document_context=None):
-        query_lower = query.lower()
+        query_lower = query.lower().strip()
         
-        # 1. AI Career Paths specific query
-        if "career path" in query_lower or "artificial intelligence" in query_lower or "career" in query_lower:
+        # 1. Greetings
+        greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
+        if any(g in query_lower for g in greetings) and len(query_lower) < 15:
             return (
-                f"## 🚀 Career Paths in Artificial Intelligence (AI)\n\n"
-                f"Artificial Intelligence is one of the fastest-growing sectors in the technology industry. "
-                f"Below is a breakdown of the primary career pathways, responsibilities, and average skill requirements:\n\n"
-                f"### 1. Machine Learning (ML) Engineer\n"
-                f"- **Role:** Bridges the gap between data science and software engineering. Builds, deploys, and optimizes scalable machine learning models in production.\n"
-                f"- **Core Skills:** Python, PyTorch/TensorFlow, Docker, Kubernetes, MLOps pipelines, SQL.\n\n"
-                f"### 2. Data Scientist\n"
-                f"- **Role:** Focuses on statistical analysis, data cleaning, and extracting business insights using analytical models.\n"
-                f"- **Core Skills:** R/Python, Pandas, Jupyter, statistics, data visualization (Tableau/Matplotlib), SQL.\n\n"
-                f"### 3. Research Scientist\n"
-                f"- **Role:** Focuses on advancing the state-of-the-art in AI algorithms, neural network design, and natural language processing.\n"
-                f"- **Core Skills:** Academic research, deep learning architectures, mathematics, C++, publication tracking.\n\n"
-                f"### 4. AI Product Manager\n"
-                f"- **Role:** Oversees the lifecycle of AI-driven products, coordinating between technical engineering teams and commercial business units.\n"
-                f"- **Core Skills:** Product management, agile methodologies, basic AI capabilities knowledge, communication.\n\n"
-                f"--- \n"
-                f"### 📈 Career Metrics and Estimated Salaries\n\n"
-                f"| Role | Experience level | Primary Stack | Avg. Global Salary |\n"
-                f"| :--- | :--- | :--- | :--- |\n"
-                f"| ML Engineer | Junior | Python, SQL, Scikit-learn | $110,000 / yr |\n"
-                f"| Data Scientist | Mid-level | Pandas, R, Tableau, SQL | $125,000 / yr |\n"
-                f"| Research Scientist | Senior | PyTorch, LaTeX, Custom GPUs | $160,000 / yr |\n"
-                f"| AI Product Manager | Mid-to-Senior | Agile, Jira, Basic ML APIs | $130,000 / yr |\n\n"
-                f"### 🏁 Recommended Steps to Start:\n"
-                f"1. **Master Mathematics & Algorithms:** Linear algebra, calculus, and probability.\n"
-                f"2. **Build Python Proficiency:** Learn packages like Pandas, NumPy, and PyTorch.\n"
-                f"3. **Complete Hands-on Projects:** Create clean github repositories demonstrating training, validation, and deployment."
+                f"Hello! I am **Pavan-GPT**, your intelligent AI Assistant. How can I help you today?\n\n"
+                f"You can ask me questions about programming, request study planners, upload documents, "
+                f"or explore our **AI Bonus Tools** in the sidebar!"
             )
             
-        # 2. Handle Document context questioning
+        # 2. AI / Machine Learning
+        if "what is the ai" in query_lower or "what is ai" in query_lower or "explain ai" in query_lower or "artificial intelligence" in query_lower:
+            return (
+                f"## 🤖 Understanding Artificial Intelligence (AI)\n\n"
+                f"Artificial Intelligence (AI) is the simulation of human intelligence processes by machines, "
+                f"especially computer systems. These processes include learning, reasoning, and self-correction.\n\n"
+                f"### Major Subfields of AI:\n"
+                f"1. **Machine Learning (ML)**: Algorithms that learn from data to make predictions or decisions.\n"
+                f"2. **Deep Learning (DL)**: A subset of ML based on artificial neural networks with multiple layers (deep representation).\n"
+                f"3. **Natural Language Processing (NLP)**: The ability of computers to understand and process human languages.\n"
+                f"4. **Computer Vision**: Enabling machines to interpret and analyze visual information from the world.\n\n"
+                f"Is there a specific subfield or model architecture (e.g. Transformers) you would like to explore?"
+            )
+            
+        # 3. Programming Python
+        if "python" in query_lower:
+            return (
+                f"## 🐍 Python Programming Language\n\n"
+                f"Python is a high-level, interpreted, general-purpose programming language. Its design philosophy "
+                f"emphasizes code readability with the use of significant indentation.\n\n"
+                f"### Key Python Libraries for Data Science:\n"
+                f"- **NumPy**: Supports large multi-dimensional arrays and matrices.\n"
+                f"- **Pandas**: Offers high-performance, easy-to-use data structures and data analysis tools.\n"
+                f"- **Matplotlib / Seaborn**: Used for plotting and data visualization.\n"
+                f"- **Scikit-Learn**: Machine learning library for classical algorithms.\n"
+                f"- **PyTorch / TensorFlow**: Deep learning frameworks.\n\n"
+                f"Here is a simple example of file verification in Python:\n"
+                f"```python\n"
+                f"import os\n"
+                f"def check_file(path):\n"
+                f"    if os.path.exists(path):\n"
+                f"        return f'File found! Size: {{os.path.getsize(path)}} bytes'\n"
+                f"    return 'File not found'\n"
+                f"```"
+            )
+
+        # 4. React
+        if "react" in query_lower:
+            return (
+                f"## ⚛️ React Library\n\n"
+                f"React is a free and open-source front-end JavaScript library for building user interfaces based on components. "
+                f"It is maintained by Meta (formerly Facebook) and a community of individual developers and companies.\n\n"
+                f"### Core React Concepts:\n"
+                f"- **Components**: Reusable, self-contained building blocks of UI.\n"
+                f"- **JSX**: A syntax extension to JavaScript that describes what the UI should look like.\n"
+                f"- **State & Props**: State is private to a component and can change, while Props are read-only inputs passed from parent components.\n"
+                f"- **Hooks**: Allow function components to use state and other React features (e.g., `useState`, `useEffect`)."
+            )
+
+        # 5. Django
+        if "django" in query_lower:
+            return (
+                f"## 🎯 Django Web Framework\n\n"
+                f"Django is a high-level Python web framework that encourages rapid development and clean, pragmatic design. "
+                f"Built by experienced developers, it takes care of much of the hassle of web development, so you can focus on writing your app without needing to reinvent the wheel.\n\n"
+                f"### Key Django Features:\n"
+                f"- **Object-Relational Mapper (ORM)**: Map databases to Python classes automatically.\n"
+                f"- **Admin Interface**: Built-in, fully customizable database editing suite.\n"
+                f"- **Authentication**: Robust user authentication and session management.\n"
+                f"- **Security**: Out-of-the-box protection against SQL injection, XSS, CSRF, and clickjacking."
+            )
+
+        # 6. Authentication/JWT
+        if "auth" in query_lower or "jwt" in query_lower or "token" in query_lower:
+            return (
+                f"## 🔐 JWT Authentication Protocol\n\n"
+                f"JSON Web Token (JWT) is an open standard (RFC 7519) that defines a compact and self-contained way "
+                f"for securely transmitting information between parties as a JSON object.\n\n"
+                f"### How JWT Auth Flow Works:\n"
+                f"1. **User Login**: The client submits credentials to the server.\n"
+                f"2. **Token Generation**: Upon verification, the server generates a payload consisting of an `access token` (short life) and a `refresh token` (long life).\n"
+                f"3. **Authorized Calls**: The client stores the access token in memory and appends it to all HTTP request headers as: `Authorization: Bearer <token>`.\n"
+                f"4. **Token Refreshing**: When the access token expires, the client calls the refresh endpoint with the refresh token to acquire a new access key."
+            )
+
+        # 7. Database
+        if "database" in query_lower or "sql" in query_lower or "sqlite" in query_lower:
+            return (
+                f"## 🗄️ Database Management Systems\n\n"
+                f"Databases store structured collections of data. They are typically split into two paradigms:\n\n"
+                f"### SQL (Relational) vs. NoSQL (Non-Relational):\n"
+                f"| Feature | SQL (e.g. SQLite, PostgreSQL) | NoSQL (e.g. MongoDB, Redis) |\n"
+                f"| :--- | :--- | :--- |\n"
+                f"| Data Model | Tables with structured rows/columns | Documents, Key-Value, Graphs |\n"
+                f"| Schema | Fixed/Pre-defined (must run migrations) | Dynamic/Schemaless |\n"
+                f"| Scalability | Vertical (scale machine hardware) | Horizontal (scale by clusters) |\n"
+                f"| Relationships | Highly optimized JOIN queries | Denormalized nested fields |"
+            )
+
+        # 8. Document context Q&A
         if document_context:
             return (
-                f"### 🔍 Document Q&A Response\n"
+                f"### 🔍 Parsed Document Analysis\n"
                 f"You asked: *\"{query}\"* referencing the attached document.\n\n"
                 f"**Based on the parsed document context, here is the answer:**\n"
                 f"- The document specifies system configurations, setup instructions, and parameters.\n"
@@ -164,13 +291,47 @@ class GeminiService:
                 f"- **Recommendation:** Ensure credentials and dependencies match the requirements listed in the parsed files."
             )
 
-        # 3. Code request
+        # 9. General explanations (e.g. "what is X", "explain Y", "how to Z", "define A")
+        subject = query.replace("what is", "").replace("what's", "").replace("explain", "").replace("describe", "").replace("define", "").replace("?", "").strip()
+        if len(subject) > 0 and (query_lower.startswith("what is") or query_lower.startswith("explain") or query_lower.startswith("how to") or query_lower.endswith("?")):
+            subject_title = subject.title()
+            return (
+                f"### 🤖 Pavan-GPT Intelligent Analysis: {subject_title}\n\n"
+                f"Here is a detailed, structured analysis regarding **{subject_title}**:\n\n"
+                f"#### 1. Core Overview\n"
+                f"**{subject_title}** represents a fundamental concept in modern technology systems. Understanding its architecture "
+                f"and operational specifications is key to building scalable, production-grade applications.\n\n"
+                f"#### 2. Key Components & Implementation\n"
+                f"- **Modularity**: Implement {subject_title} as self-contained modules to facilitate unit testing.\n"
+                f"- **Validation**: Verify input schemas and boundary conditions to prevent runtime exceptions.\n"
+                f"- **Integration**: Connect it using standard API models and maintain secure environment secrets.\n\n"
+                f"#### 3. Recommended Code Template\n"
+                f"```python\n"
+                f"# Simplified helper representation of {subject_title.replace(' ', '_').lower()}\n"
+                f"def handle_{subject_title.replace(' ', '_').lower()}_process(data):\n"
+                f"    if not data:\n"
+                f"        return {{'status': 'error', 'message': 'No parameters provided'}}\n"
+                f"    # Process data dynamically\n"
+                f"    processed = [item for item in data if item is not None]\n"
+                f"    return {{\n"
+                f"        'status': 'success',\n"
+                f"        'subject': '{subject_title}',\n"
+                f"        'items_count': len(processed)\n"
+                f"    }}\n"
+                f"```\n\n"
+                f"#### 4. Practical Roadmap\n"
+                f"1. **Analyze Requirements**: Map out input/output ranges.\n"
+                f"2. **Write Unit Tests**: Cover edge cases like null/undefined states.\n"
+                f"3. **Refactor & Optimize**: Clean up unused variables and verify complexity constraints."
+            )
+
+        # 10. Code request
         if "write" in query_lower or "code" in query_lower or "function" in query_lower:
             return (
                 f"Here is a clean, optimized code snippet matching your request:\n\n"
                 f"```javascript\n"
                 f"// React 19 Custom hook for secure JWT API requests\n"
-                f"import { useState, useEffect } from 'react';\n"
+                f"import {{ useState, useEffect }} from 'react';\n"
                 f"import api from '../services/api';\n\n"
                 f"export function useSecureData(endpoint) {{\n"
                 f"  const [data, setData] = useState(null);\n"
@@ -183,22 +344,16 @@ class GeminiService:
                 f"  }}, [endpoint]);\n\n"
                 f"  return {{ data, loading }};\n"
                 f"}}\n"
-                f"```\n\n"
-                f"### Time Complexity Review\n"
-                f"| Operation | Complexity | Description |\n"
-                f"| :--- | :--- | :--- |\n"
-                f"| Mount API Fetch | $O(1)$ | Single asynchronous call initiated on mount. |\n"
-                f"| State Re-render | $O(N)$ | React DOM updates based on response object size. |"
+                f"```"
             )
 
-        # 4. Default chat responder
+        # 11. Generic/Default Responder
         return (
             f"Hello! I am **Pavan-GPT**, your intelligent AI Assistant.\n\n"
-            f"You asked: *\"{query}\"*\n\n"
-            f"Here is a summary of information related to your query:\n"
-            f"1. **Core Architecture:** Pavan-GPT runs on a Django REST API backend coupled with a React 19 + Vite frontend client.\n"
-            f"2. **Aesthetics:** The layout uses a CSS-first Tailwind configuration with glassmorphism sheets, glowing backdrops, and active sidebar controls.\n"
-            f"3. **Capabilities:** Fully supports markdown styling, multi-line code copy blocks, voice recognition transcription, and file upload context binds.\n\n"
+            f"Regarding your query *\"{query}\"*:\n\n"
+            f"1. **Core Concept**: This relates to tech architecture or standard development workflows.\n"
+            f"2. **To Get Started**: Check the active codebase, ensure settings are configured, and verify routing connections.\n"
+            f"3. **Integration Guide**: Use custom API hooks to dynamically interact with this model's schema.\n\n"
             f"Please register/login, adjust settings, or click on **AI Bonus Tools** in the sidebar to try out our expert coding and career personas!"
         )
 

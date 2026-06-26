@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { FiUser, FiMail, FiLock, FiAlertTriangle } from 'react-icons/fi';
+import { BackendErrorDashboard } from '../components/ThreeDEffects';
 
 const Register = () => {
   const { register } = useAuth();
@@ -13,6 +14,7 @@ const Register = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -47,6 +49,9 @@ const Register = () => {
       navigate('/chat');
     } else {
       setError(result.error);
+      if (result.error.toLowerCase().includes('network') || result.error.toLowerCase().includes('connect') || result.error.toLowerCase().includes('failed')) {
+        setShowDiagnostics(true);
+      }
     }
   };
 
@@ -68,9 +73,20 @@ const Register = () => {
 
         {/* Error panel */}
         {error && (
-          <div className="mb-6 flex items-start space-x-2.5 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
-            <FiAlertTriangle className="mt-0.5 shrink-0" size={16} />
-            <span>{error}</span>
+          <div className="mb-6 flex flex-col space-y-2 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+            <div className="flex items-start space-x-2.5">
+              <FiAlertTriangle className="mt-0.5 shrink-0" size={16} />
+              <span>{error}</span>
+            </div>
+            {(error.toLowerCase().includes('network') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('failed')) && (
+              <button 
+                type="button"
+                onClick={() => setShowDiagnostics(true)}
+                className="text-left text-cyan-400 font-bold hover:underline pl-6 bg-transparent border-0 cursor-pointer focus:outline-none"
+              >
+                ⚙ Open Diagnostics & Admin Portal Setup
+              </button>
+            )}
           </div>
         )}
 
@@ -157,6 +173,12 @@ const Register = () => {
           </Link>
         </div>
       </div>
+      
+      {/* Connection Offline Diagnostics Modal */}
+      <BackendErrorDashboard 
+        isOpen={showDiagnostics}
+        onClose={() => setShowDiagnostics(false)}
+      />
     </div>
   );
 };
